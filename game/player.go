@@ -27,6 +27,7 @@ type Player struct {
 	Active     bool
 	CurrentBet int
 	LastAction Action
+	PlayerType string
 }
 
 func NewPlayer(name string, chips int) *Player {
@@ -37,19 +38,26 @@ func NewPlayer(name string, chips int) *Player {
 	}
 }
 
-func (p *Player) Deal(cards []Card) {
+func (p *Player) Deal(cards []Card) { // Deal cards to player
 	p.Hand = cards
 }
 
-func (p *Player) Fold() {
+func (p *Player) Fold() { // Player folds
 	p.Active = false
 }
 
-func (p *Player) PlaceBet(amount int) int {
+func (p *Player) PlaceBet(amount int) int { // Player places a bet
 	if amount > p.Chips {
 		amount = p.Chips
 	}
 	p.Chips -= amount
 	p.CurrentBet += amount
 	return amount
+}
+
+func (p *Player) Reset() { // Reset player state for new hand
+	p.Hand = nil
+	p.Active = true
+	p.CurrentBet = 0
+	p.LastAction = ""
 }

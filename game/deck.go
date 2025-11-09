@@ -28,7 +28,7 @@ type Card struct {
 
 type Deck []Card
 
-func NewDeck() Deck {
+func NewDeck() Deck { // Create a standard 52-card deck
 	var deck Deck
 	for _, suit := range []Suit{Hearts, Diamonds, Clubs, Spades} {
 		for _, rank := range Ranks {
@@ -38,7 +38,7 @@ func NewDeck() Deck {
 	return deck
 }
 
-func (d Deck) Shuffle() Deck {
+func (d Deck) Shuffle() Deck { // Shuffle the deck
 	rand.Seed(time.Now().UnixNano())
 	shuffled := make(Deck, len(d))
 	perm := rand.Perm(len(d))
@@ -48,6 +48,6 @@ func (d Deck) Shuffle() Deck {
 	return shuffled
 }
 
-func (c Card) String() string {
+func (c Card) String() string { // String representation of a card
 	return fmt.Sprintf("%s of %s", c.Rank, c.Suit)
 }

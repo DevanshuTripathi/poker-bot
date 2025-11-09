@@ -3,8 +3,8 @@ package game
 import "fmt"
 
 const (
-	SmallBlindAmount = 10
-	BigBlindAmount   = 20
+	SmallBlindAmount = 1 // Small blind amount in chips
+	BigBlindAmount   = 2 // Big blind amount in chips
 )
 
 type Table struct {
@@ -12,9 +12,10 @@ type Table struct {
 	Deck           Deck
 	CommunityCards []Card
 	Pot            int
+	CurrentAction  Action
 }
 
-func (t *Table) AssignPositions() {
+func (t *Table) AssignPositions() { // Assign player positions: Dealer, Small Blind, Big Blind
 	n := len(t.Players)
 	for i := range t.Players {
 		t.Players[i].Position = Normal
@@ -30,7 +31,7 @@ func (t *Table) AssignPositions() {
 	}
 }
 
-func NewTable(players []*Player) *Table {
+func NewTable(players []*Player) *Table { // Create a new table with players and shuffled deck
 	table := &Table{
 		Players: players,
 		Deck:    NewDeck().Shuffle(),
@@ -39,7 +40,7 @@ func NewTable(players []*Player) *Table {
 	return table
 }
 
-func (t *Table) DealHands() {
+func (t *Table) DealHands() { // Deal two cards to each player
 	for _, p := range t.Players {
 		if len(t.Deck) >= 2 {
 			p.Deal(t.Deck[:2])
@@ -48,7 +49,7 @@ func (t *Table) DealHands() {
 	}
 }
 
-func (t *Table) PostBlinds() {
+func (t *Table) PostBlinds() { // Post small and big blinds
 	for _, p := range t.Players {
 		switch p.Position {
 		case SmallBlind:
@@ -59,65 +60,96 @@ func (t *Table) PostBlinds() {
 	}
 }
 
-func (t *Table) DealFlop() {
+func (t *Table) DealFlop() { // Deal the flop (3 community cards)
 	t.Deck = t.Deck[1:] // Burn one card
 	t.CommunityCards = append(t.CommunityCards, t.Deck[:3]...)
 	t.Deck = t.Deck[3:]
 }
 
-func (t *Table) DealTurn() {
+func (t *Table) DealTurn() { // Deal the turn (4th community card)
 	t.Deck = t.Deck[1:] // Burn one card
 	t.CommunityCards = append(t.CommunityCards, t.Deck[0])
 	t.Deck = t.Deck[1:]
 }
 
-func (t *Table) DealRiver() {
+func (t *Table) DealRiver() { // Deal the river (5th community card)
 	t.Deck = t.Deck[1:] // Burn one card
 	t.CommunityCards = append(t.CommunityCards, t.Deck[0])
 	t.Deck = t.Deck[1:]
 }
 
-func (t *Table) ShowCommunity() {
+func (t *Table) ShowCommunity() { // Print community cards
 	for _, card := range t.CommunityCards {
 		fmt.Println(card)
 	}
 }
 
-func (t *Table) PlayerAction(p *Player, action Action, amount int, currentBet int) {
+func (t *Table) PlayerAction(p *Player, action Action, amount int, currentBet int) { // Process player action
 	switch action {
 	case Fold:
 		p.Fold()
-		fmt.Printf("%s folds\n", p.Name)
 	case Call:
 		toCall := currentBet - p.CurrentBet
 		t.Pot += p.PlaceBet(toCall)
-		fmt.Printf("%s calls %d\n", p.Name, toCall)
 	case Raise:
 		raiseAmount := amount
 		t.Pot += p.PlaceBet(raiseAmount)
-		fmt.Printf("%s raises by %d\n", p.Name, raiseAmount)
 	case Check:
 		p.LastAction = Check
-		fmt.Printf("%s checks\n", p.Name)
 	default:
-		fmt.Printf("%s does nothing\n", p.Name)
 	}
 }
 
-// func (t *Table) GetNextToBigBlind() int {
-// 	for i, p := range t.Players {
-// 		if p.Position == "Big Blind" {
-// 			return (i + 1) % len(t.Players)
-// 		}
-// 	}
-// 	return 0
-// }
+func (t *Table) GetHighestBet() int { // Get the highest current bet among active players
+	maxBet := 0
+	for _, p := range t.Players {
+		if p.CurrentBet > maxBet {
+			maxBet = p.CurrentBet
+		}
+	}
+	return maxBet
+}
 
-// func (t *Table) GetSmallBlindIndex() int {
-// 	for i, p := range t.Players {
-// 		if p.Position == "Small Blind" {
-// 			return i
-// 		}
-// 	}
-// 	return 0
-// }
+func (t *Table) GetActivePlayers() []*Player { // Get list of active players
+	active := []*Player{}
+	for _, p := range t.Players {
+		if p.Active {
+			active = append(active, p)
+		}
+	}
+	return active
+}
+
+func (t *Table) IsBettingRoundOver() bool { // Check if betting round is over
+	maxBet := t.GetHighestBet()
+	for _, p := range t.GetActivePlayers() {
+		if p.CurrentBet < maxBet {
+			// Someone is still active but hasn't matched the bet
+			return false
+		}
+	}
+	return true
+}
+
+func (t *Table) CollectBets() { // Collect bets into the pot and reset current bets
+	potThisRound := 0
+	for _, p := range t.Players {
+		potThisRound += p.CurrentBet
+		p.CurrentBet = 0
+	}
+	t.Pot += potThisRound
+}
+
+func (t *Table) ResetForNewHand() { // Reset table state for a new hand
+	t.CommunityCards = []Card{}
+	t.Pot = 0
+	t.Deck = NewDeck().Shuffle()
+
+	// Rotate players to change blinds/dealer
+	t.Players = append(t.Players[1:], t.Players[0])
+	t.AssignPositions()
+
+	for _, p := range t.Players {
+		p.Reset()
+	}
+}
