@@ -139,6 +139,10 @@ func (t *Table) IsBettingRoundOver(isPreflop bool) bool { // Check if betting ro
 			continue
 		}
 
+		if p.Chips == 0 {
+			continue
+		}
+
 		if p.CurrentBet < maxBet {
 			// Someone is still active but hasn't matched the bet
 			return false

@@ -582,7 +582,7 @@ func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 		"rivers",
 	})
 
-	opponentTypes := []string{"normal", "monkey"}
+	opponentTypes := []string{"normal"}
 
 	var lastState []float64
 	var lastAction int
@@ -593,11 +593,21 @@ func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 	dummyNextState := make([]float64, FeatureVectorSize)
 
 	winCount := 0
+	cloneWinCount := 0
 	flopCount := 0
 	turnCount := 0
 	riverCount := 0
 
 	for e := 0; e < episodes; e++ {
+
+		// Force reset stacks every hand to prevent massive accumulations
+		for _, p := range table.Players {
+			if p.Chips <= 0 {
+				p.Buyin++
+			}
+			p.Chips = 1000
+			p.Active = true
+		}
 
 		table.ResetForTraining() // New hand
 		table.DealHands()        // Deal cards
@@ -628,6 +638,7 @@ func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 		handSawFlop := false
 		handSawTurn := false
 		handSawRiver := false
+		botStartChips := botPlayer.Chips
 
 		// Simulate the hand
 		for stage := 0; stage < 4 && !done; stage++ {
@@ -727,7 +738,6 @@ func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 				var amount int
 
 				if p.Name == "BOT_Learner" {
-					fmt.Println(len(table.CommunityCards))
 					stateVec := BuildFeaturesVector(p, table) // Build feature vector
 					action := dqnAgent.ChooseAction(stateVec) // Choose action
 
@@ -801,9 +811,25 @@ func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 		if winner != nil && winner.Name == "BOT_Learner" {
 			botPlayer.Chips += table.Pot
 			winCount++
-			finalReward = 1.0 // +1.0 for a win
-		} else {
-			finalReward = -1.0 // -1.0 for a loss or fold
+		}
+
+		if winner != nil && winner.Name == "Clone_Opponent" {
+			oppPlayer.Chips += table.Pot
+			cloneWinCount++
+		}
+
+		chipChange := float64(botPlayer.Chips - botStartChips)
+		finalReward = chipChange / 100.0 // Scale reward
+
+		if finalReward > 0 {
+			finalReward *= 2 // Bonus for winning chips
+		}
+
+		if finalReward > 2.0 {
+			finalReward = 2.0
+		}
+		if finalReward < -2.0 {
+			finalReward = -2.0
 		}
 
 		// if winner != nil && winner.Name == "Clone_Opponent" {
@@ -832,10 +858,10 @@ func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 		// Now, "back-propagate" the final reward
 		// We learn from the *entire hand history* in reverse
 
-		strength := EvaluateHand(botPlayer.Hand, table.CommunityCards)
-		if finalReward == -1 && strength < 0.3 {
-			finalReward = -1.5
-		}
+		// strength := EvaluateHand(botPlayer.Hand, table.CommunityCards)
+		// if finalReward == -1 && strength < 0.3 {
+		// 	finalReward = -1.5
+		// }
 
 		// G := finalReward
 
@@ -847,34 +873,37 @@ func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 			if mem.Done {
 				mem.Reward = finalReward
 			} else {
-				strength := EvaluateHand(mem.Hole, mem.CommunityCards)
-				toCall, pot := getBettingContext(mem.Table, mem.Player)
 				mem.Reward = 0
-
-				if mem.Action == 1 { // CALL
-					if strength < 0.30 {
-						pen := 0.10 + math.Min(0.5, float64(toCall)/math.Max(1.0, float64(pot))) // scale by cost
-						mem.Reward -= pen
-					} else {
-						// small positive for reasonable calls with decent equity
-						mem.Reward += 0.02
-					}
-				}
-
-				if (mem.Action == 2 || mem.Action == 3) && strength < 0.35 {
-					mem.Reward -= 0.20
-				}
-
-				// Reward folding weak hands slightly (avoid stubborn over-calling)
-				if mem.Action == 0 && strength < 0.25 {
-					mem.Reward += 0.5
-				}
-				// Big penalty for folding monsters
-				if mem.Action == 0 && strength > 0.75 {
-					mem.Reward -= 0.6
-				}
-
 			}
+			// else {
+			// 	strength := EvaluateHand(mem.Hole, mem.CommunityCards)
+			// 	toCall, pot := getBettingContext(mem.Table, mem.Player)
+			// 	mem.Reward = 0
+
+			// 	if mem.Action == 1 { // CALL
+			// 		if strength < 0.30 {
+			// 			pen := 0.10 + math.Min(0.5, float64(toCall)/math.Max(1.0, float64(pot))) // scale by cost
+			// 			mem.Reward -= pen
+			// 		} else {
+			// 			// small positive for reasonable calls with decent equity
+			// 			mem.Reward += 0.02
+			// 		}
+			// 	}
+
+			// 	if (mem.Action == 2 || mem.Action == 3) && strength < 0.35 {
+			// 		mem.Reward -= 0.20
+			// 	}
+
+			// 	// Reward folding weak hands slightly (avoid stubborn over-calling)
+			// 	if mem.Action == 0 && strength < 0.25 {
+			// 		mem.Reward += 0.5
+			// 	}
+			// 	// Big penalty for folding monsters
+			// 	if mem.Action == 0 && strength > 0.75 {
+			// 		mem.Reward -= 0.6
+			// 	}
+
+			// }
 
 			dqnAgent.Learn(mem.State, mem.Action, mem.Reward, mem.NextState, mem.Done)
 
@@ -947,6 +976,7 @@ func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 			fmt.Printf("\n--- EPISODE %d --- \n", e+1)
 			fmt.Printf("Current Epsilon: %.4f\n", dqnAgent.GetEpsilon())
 			fmt.Printf("Wins so far: %d\n", winCount)
+			fmt.Printf("Clone Wins so far: %d\n", cloneWinCount)
 			fmt.Printf("Bot's Chips: %d, Buyins: %d\n", botPlayer.Chips, botPlayer.Buyin)
 			fmt.Printf("Clone Chips: %d, Buyins: %d\n", oppPlayer.Chips, oppPlayer.Buyin)
 			fmt.Printf("Flops seen: %d, Turns seen: %d, Rivers seen: %d\n", flopCount, turnCount, riverCount)
@@ -956,6 +986,7 @@ func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 				strconv.Itoa(e + 1),
 				fmt.Sprintf("%.4f", dqnAgent.GetEpsilon()),
 				strconv.Itoa(winCount),
+				strconv.Itoa(cloneWinCount),
 				strconv.Itoa(botPlayer.Chips),
 				strconv.Itoa(oppPlayer.Chips),
 				strconv.Itoa(botPlayer.Buyin),
@@ -967,6 +998,7 @@ func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 			csvWriter.Flush()
 
 			winCount = 0
+			cloneWinCount = 0
 			flopCount = 0
 			turnCount = 0
 			riverCount = 0
@@ -982,8 +1014,50 @@ func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 		}
 
 		if (e+1)%5000 == 0 {
-			fmt.Printf("\nAssigning weights\n")
-			opponentAgent.SetWeights(dqnAgent.GetWeights()) // Update opponent to current bot weights
+			fmt.Printf("\n--- BRAIN SYNC CHECK (Episode %d) ---\n", e+1)
+
+			// 1. Get the weights
+			botWeights := dqnAgent.GetWeights()
+
+			// 2. PRINT ALL KEYS (This will tell us the real names)
+			fmt.Println("Available Weight Keys:")
+			var validKey string
+			for k, v := range botWeights {
+				fmt.Printf(" - Key: %s | Type: %T\n", k, v)
+				validKey = k // Store a valid key to use for the test
+			}
+
+			// 3. Sync to Opponent
+			opponentAgent.SetWeights(botWeights)
+			fmt.Println("Weights synced via library.")
+
+			// 4. Perform the DNA Test (Only if we found a key)
+			if validKey != "" {
+				oppWeights := opponentAgent.GetWeights()
+
+				// We use fmt.Sprintf to safely print the value regardless of its type
+				val1 := fmt.Sprintf("%v", botWeights[validKey])
+				val2 := fmt.Sprintf("%v", oppWeights[validKey])
+
+				// Truncate for readability (just first 20 chars)
+				if len(val1) > 20 {
+					val1 = val1[:20] + "..."
+				}
+				if len(val2) > 20 {
+					val2 = val2[:20] + "..."
+				}
+
+				fmt.Printf("Bot [%s]:      %s\n", validKey, val1)
+				fmt.Printf("Opponent [%s]: %s\n", validKey, val2)
+
+				if val1 == val2 {
+					fmt.Println("✅ SUCCESS: Brains match!")
+				} else {
+					fmt.Println("❌ FAILURE: Brains do not match!")
+				}
+			} else {
+				fmt.Println("⚠️ WARNING: GetWeights() returned empty map!")
+			}
 		}
 
 	}

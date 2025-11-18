@@ -46,8 +46,13 @@ func NewDQNAgent(lr, gamma, epsilon, minEpsilon, epsilonDecay float64) *DQNAgent
 
 func (dqn *DQNAgent) ChooseAction(state []float64) int {
 	// Handles Exploration and Exploitation internally
-	action := dqn.agent.EpsilonGreedyPolicy(state, dqn.NumActions)
-	return action
+
+	if rand.Float64() < dqn.Epsilon {
+		return rand.Intn(dqn.NumActions)
+	}
+
+	qValues := dqn.agent.QNetworkPredict(state)
+	return Argmax(qValues)
 }
 
 // Argmax returns the index of the maximum value in a slice of float64
