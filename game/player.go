@@ -28,6 +28,7 @@ type Player struct {
 	CurrentBet int
 	LastAction Action
 	PlayerType string
+	Buyin      int
 }
 
 func NewPlayer(name string, chips int) *Player {
@@ -35,6 +36,7 @@ func NewPlayer(name string, chips int) *Player {
 		Name:   name,
 		Chips:  chips,
 		Active: true,
+		Buyin:  1,
 	}
 }
 

@@ -1,11 +1,13 @@
 package bot
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
 	"os"
+	"strconv"
 
 	"github.com/DevanshuTripathi/poker-bot/game"
 )
@@ -24,11 +26,15 @@ type Experience struct {
 } // Old experience struct for Q-learning
 
 type DQExperience struct {
-	State     []float64
-	Action    int
-	Reward    float64
-	NextState []float64
-	Done      bool
+	State          []float64
+	Action         int
+	Reward         float64
+	NextState      []float64
+	Done           bool
+	Hole           []game.Card
+	CommunityCards []game.Card
+	Table          *game.Table
+	Player         *game.Player
 } // DQN experience struct
 
 // Old save/load functions for Q-table
@@ -179,10 +185,39 @@ func getMonkeyOpponentAction(p *game.Player, table *game.Table) (string, int) {
 	minRaise := game.BigBlindAmount * 2
 	strength := EvaluateHand(p.Hand, table.CommunityCards)
 
+	stage := len(table.CommunityCards) // 0 preflop, 3 flop, 4 turn, 5 river
+
+	if strength > 0.7 {
+		// Always all-in with monsters
+		return "Raise", p.Chips
+	}
+
+	if strength > 0.4 {
+		// Strong hands: 90% chance to raise
+		if rand.Float64() < 0.90 {
+			raiseAmount := table.Pot / 2
+			if toCall > 0 {
+				raiseAmount = toCall * 3
+			}
+			return "Raise", int(math.Min(float64(p.Chips), float64(raiseAmount)))
+		}
+	}
+
+	// Post-flop pressure: monkey raises more aggressively on turn/river
+	if stage > 2 {
+		if rand.Float64() < 0.45 { // 45% chance to apply turn/river pressure
+			raiseAmount := int(float64(table.Pot) * 0.7) // big-ish raise ~70% pot
+			if raiseAmount < minRaise {
+				raiseAmount = minRaise
+			}
+			return "Raise", int(math.Min(float64(p.Chips), float64(raiseAmount)))
+		}
+	}
+
 	// 80% chance to be aggressive
 	if rand.Float64() < 0.80 {
-		if strength >= 0.2 || rand.Float64() < 0.1 { // Any pair or bluff
-			raiseAmount := table.Pot
+		if strength >= 0.2 || rand.Float64() < 0.50 { // Any pair or bluff
+			raiseAmount := table.Pot / 2
 			if toCall > 0 {
 				raiseAmount = toCall * 3
 			}
@@ -196,25 +231,50 @@ func getMonkeyOpponentAction(p *game.Player, table *game.Table) (string, int) {
 	if toCall == 0 {
 		return "Check", 0
 	}
-	if toCall > p.Chips/10 {
-		return "Fold", 0
-	} // Folds if it's a huge bet
 	return "Call", toCall
 }
 
-// Normal opponent: calling station with occasional aggression
+// Normal opponent: calling station with 40% aggression
 func getNormalOpponentAction(p *game.Player, table *game.Table) (string, int) {
 	maxBet := table.GetHighestBet()
 	toCall := maxBet - p.CurrentBet
 	minRaise := game.BigBlindAmount * 2
 	strength := EvaluateHand(p.Hand, table.CommunityCards)
+	stage := len(table.CommunityCards) // 0 preflop, 3 flop, 4 turn, 5 river
 
-	// 20% chance to be aggressive
+	if strength > 0.7 {
+		// 70% chance to go all-in with monsters
+		if rand.Float64() < 0.70 {
+			return "Raise", p.Chips
+		}
+	}
+
+	if strength > 0.4 {
+		// Strong hands: 50% chance to raise
+		if rand.Float64() < 0.50 {
+			raiseAmount := table.Pot / 2
+			if toCall > 0 {
+				raiseAmount = toCall * 2
+			}
+			return "Raise", int(math.Min(float64(p.Chips), float64(raiseAmount)))
+		}
+	}
+
+	// Post-flop occasional pressure
+	if stage > 2 && rand.Float64() < 0.28 { // ~28% turn/river raise
+		raiseAmount := int(float64(table.Pot) * 0.5) // ~50% pot
+		if raiseAmount < minRaise {
+			raiseAmount = minRaise
+		}
+		return "Raise", int(math.Min(float64(p.Chips), float64(raiseAmount)))
+	}
+
+	// 40% chance to be aggressive
 	if rand.Float64() < 0.20 {
 		if strength >= 0.2 || rand.Float64() < 0.1 {
-			raiseAmount := table.Pot
+			raiseAmount := table.Pot / 3
 			if toCall > 0 {
-				raiseAmount = toCall * 3
+				raiseAmount = toCall * 2
 			}
 			if raiseAmount < minRaise {
 				raiseAmount = minRaise
@@ -222,13 +282,18 @@ func getNormalOpponentAction(p *game.Player, table *game.Table) (string, int) {
 			return "Raise", int(math.Min(float64(p.Chips), float64(raiseAmount)))
 		}
 	}
+
+	if toCall > 0 && strength < 0.19 { // < 0.19 is "S_JUNK"
+		return "Fold", 0
+	}
+
 	// Default: "Calling Station"
 	if toCall == 0 {
 		return "Check", 0
 	}
-	if toCall > p.Chips/5 {
+	if toCall > p.Chips/8 && strength < 0.25 {
 		return "Fold", 0
-	} // Folds if > 20% of stack
+	} // Folds if it's a huge bet against a weak hand
 	return "Call", toCall
 }
 
@@ -386,11 +451,11 @@ func BuildFeatures(bot *game.Player, table *game.Table) string {
 	)
 }
 
-// Old Action mapping (0=fold, 1=call/check, 2=small raise, 3=big raise)
 func ActionToAmount(action int, table *game.Table, bot *game.Player) (string, int) {
 
 	toCall, pot := getBettingContext(table, bot)
 	minRaise := game.BigBlindAmount * 2
+	raiseAmount := 0
 
 	switch action {
 	case 0: // fold -> if nothing to call, treat as check
@@ -403,21 +468,20 @@ func ActionToAmount(action int, table *game.Table, bot *game.Player) (string, in
 			return "Check", 0
 		}
 		return "Call", toCall
-	case 2:
-		raiseAmount := 0
+	case 2: // small raise (~0.5 - 1.0 pot)
+		// prefer half-pot to 3x toCall
 		if toCall > 0 {
-			raiseAmount = toCall * 3
+			raiseAmount = int(math.Max(float64(minRaise), float64(toCall)*2))
 		} else {
-			raiseAmount = pot / 2
-		}
-		if raiseAmount < minRaise {
-			raiseAmount = minRaise
+			raiseAmount = int(math.Max(float64(minRaise), float64(pot)/2))
 		}
 		return "Raise", int(math.Min(float64(bot.Chips), float64(raiseAmount)))
-	case 3:
-		raiseAmount := pot + toCall
-		if raiseAmount == 0 {
-			raiseAmount = game.BigBlindAmount * 4
+
+	case 3: // big raise (~pot to 1.5 pot)
+		if toCall > 0 {
+			raiseAmount = int(math.Max(float64(minRaise*2), float64(toCall)*4))
+		} else {
+			raiseAmount = int(math.Max(float64(minRaise*2), float64(pot)))
 		}
 		return "Raise", int(math.Min(float64(bot.Chips), float64(raiseAmount)))
 	default:
@@ -464,80 +528,196 @@ func (q *QAgent) UpdateTerminal(state string, action int, reward float64) {
 func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 
 	dqnAgent := NewDQNAgent(
-		0.0001,   // learningRate
-		0.95,     // gamma
-		1.0,      // epsilon
-		0.01,     // minEpsilon
-		0.999990, // Epsilon *Decay Factor*
+		0.0001,  // learningRate
+		0.95,    // gamma
+		1.0,     // epsilon
+		0.01,    // minEpsilon
+		0.99990, // Epsilon *Decay Factor*
+	)
+
+	opponentAgent := NewDQNAgent(
+		0.0001,  // lr
+		0.95,    // gamma
+		0.00,    // Epsilon
+		0.00,    // minEpsilon
+		0.99990, // decayRate
 	)
 
 	players := []*game.Player{game.NewPlayer("BOT_Learner", 1000)} // Our bot
-	for i := 1; i < numPlayers; i++ {
+	for i := 1; i < numPlayers-1; i++ {
 		opponent := game.NewPlayer("Opponent", 1000)
 		opponent.PlayerType = "normal" // default type
 		players = append(players, opponent)
 	}
 	botPlayer := players[0]
+	cloneOpponent := game.NewPlayer("Clone_Opponent", 1000)
+	cloneOpponent.PlayerType = "clone"
+	players = append(players, cloneOpponent)
+	oppPlayer := players[len(players)-1]
 	table := game.NewTable(players)
 
 	fmt.Printf("Training DQN with Progressive Difficulty (%d players)...\n", numPlayers)
-	opponentTypes := []string{"normal"} // Start with only normal opponents
+
+	// === CSV LOGGING SETUP ===
+	csvFile, err := os.Create("training_log.csv")
+	if err != nil {
+		panic(err)
+	}
+	defer csvFile.Close()
+
+	csvWriter := csv.NewWriter(csvFile)
+	defer csvWriter.Flush()
+
+	// CSV header
+	csvWriter.Write([]string{
+		"episode",
+		"epsilon",
+		"wins",
+		"bot_chips",
+		"clone_chips",
+		"bot_buyins",
+		"clone_buyins",
+		"flops",
+		"turns",
+		"rivers",
+	})
+
+	opponentTypes := []string{"normal", "monkey"}
 
 	var lastState []float64
 	var lastAction int
-	lastChips := botPlayer.Chips
+
+	var cloneLastState []float64
+	var cloneLastAction int
 
 	dummyNextState := make([]float64, FeatureVectorSize)
 
+	winCount := 0
+	flopCount := 0
+	turnCount := 0
+	riverCount := 0
+
 	for e := 0; e < episodes; e++ {
 
-		table.ResetForNewHand() // New hand
-		table.DealHands()       // Deal cards
-		table.PostBlinds()      // Post blinds
+		table.ResetForTraining() // New hand
+		table.DealHands()        // Deal cards
+		table.PostBlinds()       // Post blinds
 
 		lastState = nil
 		lastAction = 0
-		lastChips = botPlayer.Chips
 
-		if e == 200000 {
-			fmt.Println("\n--- ADDING 'MONKEY' OPPONENT ---")
-			opponentTypes = append(opponentTypes, "monkey") // Add monkey opponent
-		}
+		cloneLastState = nil
+		cloneLastAction = 0
+
+		var handHistory []*DQExperience
+		var cloneHistory []*DQExperience
+
+		// if e == 200000 {
+		// 	fmt.Println("\n--- ADDING 'MONKEY' OPPONENT ---")
+		// 	opponentTypes = append(opponentTypes, "monkey") // Add monkey opponent
+		// }
 
 		// Assign opponent types
 		for _, p := range players {
-			if p.Name != "BOT_Learner" {
+			if p.Name != "BOT_Learner" && p.Name != "Clone_Opponent" {
 				p.PlayerType = opponentTypes[rand.Intn(len(opponentTypes))]
 			}
 		}
 
 		done := false
+		handSawFlop := false
+		handSawTurn := false
+		handSawRiver := false
 
 		// Simulate the hand
 		for stage := 0; stage < 4 && !done; stage++ {
+
+			// Reset players' last actions
+			for _, p := range table.Players {
+				p.LastAction = ""
+			}
+
+			if botPlayer.Active {
+				if stage == 1 {
+					handSawFlop = true
+				} else if stage == 2 {
+					handSawTurn = true
+				} else if stage == 3 {
+					handSawRiver = true
+				}
+			}
+
 			if len(table.GetActivePlayers()) <= 1 {
 				break
 			} // Early exit if only one player left
 
 			startIdx := 1
 			if stage == 0 {
-				startIdx = 3 % len(table.Players) // First to act pre-flop is UTG
+				if numPlayers == 2 {
+					startIdx = 0
+				} else {
+					startIdx = 3 % len(table.Players)
+				}
 			}
 
-			playersToAct := len(table.GetActivePlayers())
-			playersActed := 0
+			// lastAggressor := -1
+			// if stage == 0 {
+			// 	for i, p := range table.Players {
+			// 		if p.Position == game.BigBlind {
+			// 			lastAggressor = i
+			// 			break
+			// 		}
+			// 	}
+			// } else {
+			// 	for i := 1; i <= len(table.Players); i++ {
+			// 		p := table.Players[i%len(table.Players)]
+			// 		if p.Active {
+			// 			lastAggressor = i % len(table.Players)
+			// 			break
+			// 		}
+			// 	}
+			// }
+			// if lastAggressor == -1 {
+			// 	lastAggressor = 0
+			// } // Failsafe
 
-			for playersActed < playersToAct || !table.IsBettingRoundOver() {
-				if len(table.GetActivePlayers()) <= 1 {
-					done = true
+			currentActorIdx := startIdx
+
+			for {
+
+				if table.IsBettingRoundOver(stage == 0) {
 					break
-				} // Early exit if only one player left
+				}
 
-				playerIdx := (startIdx + playersActed) % len(table.Players)
-				p := table.Players[playerIdx]
+				p := table.Players[currentActorIdx]
 
-				if !p.Active {
-					playersActed++
+				// allMatched := true
+				// activePlayers := table.GetActivePlayers()
+
+				// if currentActorIdx == (lastAggressor+1)%len(players) && p.CurrentBet == maxBet {
+				// 	break
+				// }
+
+				// if len(activePlayers) <= 1 {
+				// 	done = true
+				// 	break
+				// }
+
+				// for _, ap := range activePlayers {
+				// 	if ap.Chips > 0 && ap.CurrentBet < maxBet {
+				// 		allMatched = false
+				// 	}
+				// }
+				// // Special Preflop BB case
+				// if stage == 0 && p.Position == game.BigBlind && maxBet == game.BigBlindAmount {
+				// 	allMatched = false
+				// }
+				// if allMatched {
+				// 	break
+				// }
+
+				if !p.Active || p.Chips == 0 { // Skip folded or all-in players
+					currentActorIdx = (currentActorIdx + 1) % len(table.Players)
 					continue
 				}
 
@@ -547,25 +727,42 @@ func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 				var amount int
 
 				if p.Name == "BOT_Learner" {
+					fmt.Println(len(table.CommunityCards))
 					stateVec := BuildFeaturesVector(p, table) // Build feature vector
 					action := dqnAgent.ChooseAction(stateVec) // Choose action
 
 					if lastState != nil {
-						// We are NOT done, so reward is 0 (or chip-change)
-						// We give a small reward based on chip changes
-						reward := (botPlayer.Chips - lastChips)
-						dqnAgent.Learn(lastState, lastAction, reward, stateVec, false)
+						handHistory = append(handHistory, &DQExperience{
+							State: lastState, Action: lastAction, Reward: 0, NextState: stateVec, Done: false,
+							Hole: append([]game.Card{}, p.Hand...), CommunityCards: append([]game.Card{}, table.CommunityCards...),
+							Table: table, Player: botPlayer,
+						})
 					}
 
-					lastState = stateVec        // Update last state
-					lastAction = action         // Update last action
-					lastChips = botPlayer.Chips // Update last chips
+					lastState = stateVec // Update last state
+					lastAction = action  // Update last action
 
 					actionName, amount = ActionToAmount(action, table, p) // Map action to game action
 
 				} else {
 					// Opponent acts
 					switch p.PlayerType {
+					case "clone":
+						stateVec := BuildFeaturesVector(p, table)
+						action := opponentAgent.ChooseAction(stateVec)
+
+						if cloneLastState != nil {
+							cloneHistory = append(cloneHistory, &DQExperience{
+								State: cloneLastState, Action: cloneLastAction, Reward: 0, NextState: stateVec, Done: false,
+								Hole: append([]game.Card{}, p.Hand...), CommunityCards: append([]game.Card{}, table.CommunityCards...),
+								Table: table, Player: oppPlayer,
+							})
+						}
+
+						cloneLastState = stateVec
+						cloneLastAction = action
+
+						actionName, amount = ActionToAmount(action, table, p)
 					case "monkey":
 						actionName, amount = getMonkeyOpponentAction(p, table)
 					default: // "normal"
@@ -575,16 +772,12 @@ func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 
 				// Execute action
 				table.PlayerAction(p, game.Action(actionName), amount, maxBet)
-				if actionName == "Raise" { // Reset players to act after a raise
-					playersToAct = len(table.GetActivePlayers())
-					playersActed = 0
-					startIdx = (playerIdx + 1) % len(table.Players)
-				} else { // Move to next player
-					playersActed++
-				}
-				if playersActed >= len(table.Players)*3 {
+
+				currentActorIdx = (currentActorIdx + 1) % len(table.Players)
+				if len(table.GetActivePlayers()) <= 1 {
+					done = true
 					break
-				} // Safety break to avoid infinite loops
+				}
 			}
 
 			table.CollectBets() // Collect bets at end of round
@@ -601,25 +794,198 @@ func TrainPokerBot(episodes int, numPlayers int) *DQNAgent {
 
 		table.CollectBets() // Final collection of bets
 
+		finalReward := 0.0
+		// cloneReward := 0.0
 		// Determine the winner
 		winner := findWinner(table)
-		if winner != nil && winner.Name == "BOT" { // Our bot won
-			botPlayer.Chips += table.Pot // Award pot to bot
+		if winner != nil && winner.Name == "BOT_Learner" {
+			botPlayer.Chips += table.Pot
+			winCount++
+			finalReward = 1.0 // +1.0 for a win
+		} else {
+			finalReward = -1.0 // -1.0 for a loss or fold
 		}
+
+		// if winner != nil && winner.Name == "Clone_Opponent" {
+		// 	oppPlayer.Chips += table.Pot
+		// 	cloneReward = 1.0 // +1.0 for a win
+		// } else {
+		// 	cloneReward = -1.0 // -1.0 for a loss or fold
+		// }
 
 		if lastState != nil { // Final learning step at end of hand
-			finalReward := botPlayer.Chips - lastChips // Calculate final reward
-			dqnAgent.Learn(lastState, lastAction, finalReward, dummyNextState, true)
+			handHistory = append(handHistory, &DQExperience{
+				State: lastState, Action: lastAction, Reward: finalReward, NextState: dummyNextState, Done: true,
+				Hole: append([]game.Card{}, botPlayer.Hand...), CommunityCards: append([]game.Card{}, table.CommunityCards...),
+				Table: table, Player: botPlayer,
+			})
 		}
 
+		if cloneLastState != nil { // Final learning step for clone opponent
+			cloneHistory = append(cloneHistory, &DQExperience{
+				State: cloneLastState, Action: cloneLastAction, Reward: 0, NextState: dummyNextState, Done: true,
+				Hole: append([]game.Card{}, oppPlayer.Hand...), CommunityCards: append([]game.Card{}, table.CommunityCards...),
+				Table: table, Player: oppPlayer,
+			})
+		}
+
+		// Now, "back-propagate" the final reward
+		// We learn from the *entire hand history* in reverse
+
+		strength := EvaluateHand(botPlayer.Hand, table.CommunityCards)
+		if finalReward == -1 && strength < 0.3 {
+			finalReward = -1.5
+		}
+
+		// G := finalReward
+
+		// handHistory = append(handHistory, cloneHistory...)
+
+		for i := len(handHistory) - 1; i >= 0; i-- {
+			mem := handHistory[i]
+
+			if mem.Done {
+				mem.Reward = finalReward
+			} else {
+				strength := EvaluateHand(mem.Hole, mem.CommunityCards)
+				toCall, pot := getBettingContext(mem.Table, mem.Player)
+				mem.Reward = 0
+
+				if mem.Action == 1 { // CALL
+					if strength < 0.30 {
+						pen := 0.10 + math.Min(0.5, float64(toCall)/math.Max(1.0, float64(pot))) // scale by cost
+						mem.Reward -= pen
+					} else {
+						// small positive for reasonable calls with decent equity
+						mem.Reward += 0.02
+					}
+				}
+
+				if (mem.Action == 2 || mem.Action == 3) && strength < 0.35 {
+					mem.Reward -= 0.20
+				}
+
+				// Reward folding weak hands slightly (avoid stubborn over-calling)
+				if mem.Action == 0 && strength < 0.25 {
+					mem.Reward += 0.5
+				}
+				// Big penalty for folding monsters
+				if mem.Action == 0 && strength > 0.75 {
+					mem.Reward -= 0.6
+				}
+
+			}
+
+			dqnAgent.Learn(mem.State, mem.Action, mem.Reward, mem.NextState, mem.Done)
+
+			// G *= dqnAgent.Gamma
+
+		}
+
+		// cloneStrength := EvaluateHand(oppPlayer.Hand, table.CommunityCards)
+		// if cloneReward == -1 && cloneStrength < 0.3 {
+		// 	cloneReward = -1.5
+		// }
+
+		// for i := len(cloneHistory) - 1; i >= 0; i-- {
+		// 	mem := cloneHistory[i]
+
+		// 	if mem.Done {
+		// 		mem.Reward = cloneReward
+		// 	} else {
+		// 		strength := EvaluateHand(mem.Hole, mem.CommunityCards)
+		// 		toCall, pot := getBettingContext(mem.Table, mem.Player)
+		// 		mem.Reward = 0
+
+		// 		if mem.Action == 1 { // CALL
+		// 			if strength < 0.30 {
+		// 				pen := 0.10 + math.Min(0.5, float64(toCall)/math.Max(1.0, float64(pot))) // scale by cost
+		// 				mem.Reward -= pen
+		// 			} else {
+		// 				// small positive for reasonable calls with decent equity
+		// 				mem.Reward += 0.02
+		// 			}
+		// 		}
+
+		// 		if (mem.Action == 2 || mem.Action == 3) && strength < 0.35 {
+		// 			mem.Reward -= 0.20
+		// 		}
+
+		// 		// Reward folding weak hands slightly (avoid stubborn over-calling)
+		// 		if mem.Action == 0 && strength < 0.25 {
+		// 			mem.Reward += 0.5
+		// 		}
+		// 		// Big penalty for folding monsters
+		// 		if mem.Action == 0 && strength > 0.75 {
+		// 			mem.Reward -= 0.6
+		// 		}
+
+		// 	}
+
+		// 	opponentAgent.Learn(mem.State, mem.Action, mem.Reward, mem.NextState, mem.Done)
+
+		// 	// G *= dqnAgent.Gamma
+
+		// }
+
 		dqnAgent.DecayEpsilon() // Decay epsilon after each episode
+		// opponentAgent.DecayEpsilon() // Decay epsilon for opponent as well
+
+		if handSawFlop {
+			flopCount++
+		}
+		if handSawTurn {
+			turnCount++
+		}
+		if handSawRiver {
+			riverCount++
+		}
 
 		if (e+1)%1000 == 0 {
 			// This "snapshot" is just a printout. The *real* snapshot
 			// (target network update) is happening inside dqn.agent.Learn()
 			fmt.Printf("\n--- EPISODE %d --- \n", e+1)
 			fmt.Printf("Current Epsilon: %.4f\n", dqnAgent.GetEpsilon())
+			fmt.Printf("Wins so far: %d\n", winCount)
+			fmt.Printf("Bot's Chips: %d, Buyins: %d\n", botPlayer.Chips, botPlayer.Buyin)
+			fmt.Printf("Clone Chips: %d, Buyins: %d\n", oppPlayer.Chips, oppPlayer.Buyin)
+			fmt.Printf("Flops seen: %d, Turns seen: %d, Rivers seen: %d\n", flopCount, turnCount, riverCount)
+
+			// === WRITE TO CSV ===
+			csvWriter.Write([]string{
+				strconv.Itoa(e + 1),
+				fmt.Sprintf("%.4f", dqnAgent.GetEpsilon()),
+				strconv.Itoa(winCount),
+				strconv.Itoa(botPlayer.Chips),
+				strconv.Itoa(oppPlayer.Chips),
+				strconv.Itoa(botPlayer.Buyin),
+				strconv.Itoa(oppPlayer.Buyin),
+				strconv.Itoa(flopCount),
+				strconv.Itoa(turnCount),
+				strconv.Itoa(riverCount),
+			})
+			csvWriter.Flush()
+
+			winCount = 0
+			flopCount = 0
+			turnCount = 0
+			riverCount = 0
+
+			fmt.Println("Reseting Chips")
+
+			for _, p := range table.Players {
+				p.Chips = 1000
+				p.Active = true
+				p.CurrentBet = 0
+				p.Buyin = 0
+			}
 		}
+
+		if (e+1)%5000 == 0 {
+			fmt.Printf("\nAssigning weights\n")
+			opponentAgent.SetWeights(dqnAgent.GetWeights()) // Update opponent to current bot weights
+		}
+
 	}
 	fmt.Println("Training completed.")
 	return dqnAgent

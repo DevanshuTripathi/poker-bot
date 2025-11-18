@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"math/rand"
 	"os"
 
 	"github.com/iampaapa/dqn"
@@ -49,7 +50,55 @@ func (dqn *DQNAgent) ChooseAction(state []float64) int {
 	return action
 }
 
-func (dqn *DQNAgent) Learn(state []float64, action int, reward int, nextState []float64, done bool) {
+// Argmax returns the index of the maximum value in a slice of float64
+func Argmax(arr []float64) int {
+	maxIdx := 0
+	maxVal := arr[0]
+	for i, val := range arr {
+		if val > maxVal {
+			maxIdx = i
+			maxVal = val
+		}
+	}
+	return maxIdx
+}
+
+func (dqn *DQNAgent) ChooseActionSafe(state []float64, toCall, pot, stack int) int {
+	strength := state[0] // your feature vector's 1st element is hand strength
+
+	// Epsilon random move
+	if rand.Float64() < dqn.Epsilon {
+		return rand.Intn(dqn.NumActions)
+	}
+
+	// Normal DQN action
+	qValues := dqn.agent.QNetworkPredict(state)
+	best := Argmax(qValues)
+
+	// 1. If call cost is huge relative to pot, fold weak hands
+	if toCall > 0 {
+		odds := float64(toCall) / float64(toCall+pot+1)
+
+		// If equity << required odds, fold
+		if strength < 0.30 && odds > 0.30 {
+			return 0 // fold
+		}
+	}
+
+	// 2. If call cost is >25% of stack, fold unless strong
+	if float64(toCall) > 0.25*float64(stack) && strength < 0.40 {
+		return 0
+	}
+
+	// 3. If villain raises and bot has junk, fold
+	if best == 1 && strength < 0.25 && toCall > 0 { // best==CALL
+		return 0 // fold weak calls
+	}
+
+	return best
+}
+
+func (dqn *DQNAgent) Learn(state []float64, action int, reward float64, nextState []float64, done bool) {
 	// The 'Train' method handles everything:
 	// 1. Adding to the replay buffer
 	// 2. Sampling a batch
@@ -95,4 +144,17 @@ func (agent *DQNAgent) LoadModel(filePath string) error {
 	}
 	defer f.Close()
 	return agent.agent.Load(f)
+}
+
+// GetWeights exposes the *inner* network's GetWeights method
+func (dqn *DQNAgent) GetWeights() map[string]interface{} {
+	// We're assuming the 'agent' struct has a public 'qNetwork'
+	// or that you added GetWeights() to the dqn.DQN struct itself.
+	// Let's assume you added it to dqn.DQN, which calls its internal qNetwork.
+	return dqn.agent.GetWeights()
+}
+
+// SetWeights exposes the *inner* network's SetWeights method
+func (dqn *DQNAgent) SetWeights(weights map[string]interface{}) {
+	dqn.agent.SetWeights(weights)
 }

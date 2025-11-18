@@ -5,6 +5,7 @@ import "fmt"
 const (
 	SmallBlindAmount = 1 // Small blind amount in chips
 	BigBlindAmount   = 2 // Big blind amount in chips
+	InitialStack     = 1000
 )
 
 type Table struct {
@@ -49,13 +50,15 @@ func (t *Table) DealHands() { // Deal two cards to each player
 	}
 }
 
-func (t *Table) PostBlinds() { // Post small and big blinds
+func (t *Table) PostBlinds() {
 	for _, p := range t.Players {
 		switch p.Position {
 		case SmallBlind:
-			p.PlaceBet(SmallBlindAmount)
+			t.Pot += p.PlaceBet(SmallBlindAmount)
+			p.LastAction = Bet // They have put money in
 		case BigBlind:
-			p.PlaceBet(BigBlindAmount)
+			t.Pot += p.PlaceBet(BigBlindAmount)
+			p.LastAction = Bet // They have put money in
 		}
 	}
 }
@@ -88,12 +91,15 @@ func (t *Table) PlayerAction(p *Player, action Action, amount int, currentBet in
 	switch action {
 	case Fold:
 		p.Fold()
+		p.LastAction = Fold
 	case Call:
 		toCall := currentBet - p.CurrentBet
 		t.Pot += p.PlaceBet(toCall)
+		p.LastAction = Call
 	case Raise:
 		raiseAmount := amount
 		t.Pot += p.PlaceBet(raiseAmount)
+		p.LastAction = Raise
 	case Check:
 		p.LastAction = Check
 	default:
@@ -120,11 +126,33 @@ func (t *Table) GetActivePlayers() []*Player { // Get list of active players
 	return active
 }
 
-func (t *Table) IsBettingRoundOver() bool { // Check if betting round is over
+func (t *Table) IsBettingRoundOver(isPreflop bool) bool { // Check if betting round is over
 	maxBet := t.GetHighestBet()
-	for _, p := range t.GetActivePlayers() {
+	activePlayers := t.GetActivePlayers()
+
+	if len(activePlayers) <= 1 {
+		return true // Only one player left
+	}
+
+	for _, p := range activePlayers {
+		if !p.Active {
+			continue
+		}
+
 		if p.CurrentBet < maxBet {
 			// Someone is still active but hasn't matched the bet
+			return false
+		}
+
+		// Handle the "Big Blind" exception preflop
+		if isPreflop && p.Position == BigBlind && p.CurrentBet == BigBlindAmount && maxBet == BigBlindAmount {
+			if p.LastAction == Bet { // They "posted" but haven't "acted"
+				return false
+			}
+		}
+
+		// Handle players who haven't acted at all
+		if p.LastAction == "" {
 			return false
 		}
 	}
@@ -151,5 +179,24 @@ func (t *Table) ResetForNewHand() { // Reset table state for a new hand
 
 	for _, p := range t.Players {
 		p.Reset()
+	}
+}
+
+func (t *Table) ResetForTraining() {
+	t.CommunityCards = []Card{}
+	t.Pot = 0
+	t.Deck = NewDeck().Shuffle()
+
+	// Rotate players to change blinds/dealer
+	t.Players = append(t.Players[1:], t.Players[0])
+	t.AssignPositions()
+
+	for _, p := range t.Players {
+		p.Reset() // Resets hand, active status, etc.
+
+		if p.Chips <= 0 {
+			p.Chips = InitialStack // Buy-in for training
+			p.Buyin += 1
+		}
 	}
 }

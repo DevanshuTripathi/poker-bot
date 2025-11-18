@@ -1,6 +1,10 @@
 package bot
 
-import "github.com/DevanshuTripathi/poker-bot/game"
+import (
+	"fmt"
+
+	"github.com/DevanshuTripathi/poker-bot/game"
+)
 
 const (
 	// Strength Category (5 slots total)
@@ -11,7 +15,7 @@ const (
 	// Call Cost (1 slot)
 	// Pot Size (1 slot)
 	// Active Players (1 slot)
-	FeatureVectorSize = 20
+	FeatureVectorSize = 23
 )
 
 func BuildFeaturesVector(bot *game.Player, table *game.Table) []float64 {
@@ -22,9 +26,10 @@ func BuildFeaturesVector(bot *game.Player, table *game.Table) []float64 {
 
 	var winProb float64
 	if stage == 0 {
-		winProb = EstimateWinProbability(bot.Hand, table.CommunityCards, len(table.GetActivePlayers())-1, 50)
-	} else {
 		winProb = strength
+	} else {
+		fmt.Println("here")
+		winProb = EstimateWinProbability(bot.Hand, table.CommunityCards, len(table.GetActivePlayers())-1, 5000)
 	}
 
 	toCall, pot := getBettingContext(table, bot)      // Get betting context
@@ -86,10 +91,13 @@ func BuildFeaturesVector(bot *game.Player, table *game.Table) []float64 {
 		vec[15] = 1.0
 	}
 
-	vec[16] = float64(stage) / 5.0                                    // Normalize stage (0-4)
-	vec[17] = float64(toCall) / float64(bot.Chips+1)                  // Normalize call cost
-	vec[18] = float64(pot) / float64(bot.Chips+toCall+1)              // Normalize pot size
-	vec[19] = float64(numActivePlayers) / float64(len(table.Players)) // Normalize active players
+	vec[16] = float64(stage) / 3.0 // Normalize stage (0-3)
+	vec[17] = float64(toCall) / float64(pot+1)
+	vec[18] = float64(toCall) / float64(bot.Chips+1)                  // Normalize call cost
+	vec[19] = float64(pot) / float64(bot.Chips+toCall+1)              // Normalize pot size
+	vec[20] = float64(bot.Chips) / float64(pot+1)                     // Normalize bot stack
+	vec[21] = float64(toCall) / float64(game.BigBlindAmount+1)        // Bet/BB
+	vec[22] = float64(numActivePlayers) / float64(len(table.Players)) // Normalize active players
 
 	return vec
 }

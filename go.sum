@@ -1,6 +1,6 @@
-github.com/DevanshuTripathi/dqn v0.0.0-20251109085326-26a19654774c h1:EhP76aNATLutZXmVuaDQP+Bwy5PLX7B7kxyNbsdQem8=
-github.com/DevanshuTripathi/dqn v0.0.0-20251109085326-26a19654774c/go.mod h1:v0JsPdmAWbTmRNHP8V+ECdZJzxEjbpJvl/GNyCoixIE=
-golang.org/x/exp v0.0.0-20231110203233-9a3e6036ecaa h1:FRnLl4eNAQl8hwxVVC17teOw8kdjVDVAiFMtgUdTSRQ=
-golang.org/x/exp v0.0.0-20231110203233-9a3e6036ecaa/go.mod h1:zk2irFbV9DP96SEBUUAy67IdHUaZuSnrz1n472HUCLE=
-gonum.org/v1/gonum v0.15.0 h1:2lYxjRbTYyxkJxlhC+LvJIx3SsANPdRybu1tGj9/OrQ=
-gonum.org/v1/gonum v0.15.0/go.mod h1:xzZVBJBtS+Mz4q0Yl2LJTk+OxOg4jiXZ7qBoM0uISGo=
+github.com/DevanshuTripathi/dqn v0.0.0-20251114043219-66605f2daa18 h1:3qgU+oaYmv/t5eGuoe1Sj8qL9Vi2tTYmI/ZZmRlMgtY=
+github.com/DevanshuTripathi/dqn v0.0.0-20251114043219-66605f2daa18/go.mod h1:v0JsPdmAWbTmRNHP8V+ECdZJzxEjbpJvl/GNyCoixIE=
+github.com/DevanshuTripathi/dqn v0.0.0-20251115143342-8d5a95d401e5 h1:ez05xdsoZ/jIkG/5xWh0peH3yR8TZlVFXEb6adkVBkg=
+github.com/DevanshuTripathi/dqn v0.0.0-20251115143342-8d5a95d401e5/go.mod h1:v0JsPdmAWbTmRNHP8V+ECdZJzxEjbpJvl/GNyCoixIE=
+gonum.org/v1/gonum v0.16.0 h1:5+ul4Swaf3ESvrOnidPp4GZbzf0mxVQpDCYUQE7OJfk=
+gonum.org/v1/gonum v0.16.0/go.mod h1:fef3am4MQ93R2HHpKnLk4/Tbh/s0+wqD5nfa6Pnwy4E=

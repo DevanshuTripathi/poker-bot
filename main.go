@@ -31,9 +31,9 @@ func main() {
 		fmt.Println("Invalid input. Please enter a number between 2 and 9.")
 	}
 
-	modelDir := "models"                                                   // Directory to save/load models
-	os.MkdirAll(modelDir, os.ModePerm)                                     // makes the folder if it doesn’t exist
-	modelFile := fmt.Sprintf("%s/dqn-model-%dp.gob", modelDir, numPlayers) // Model file path
+	modelDir := "models"                                                                      // Directory to save/load models
+	os.MkdirAll(modelDir, os.ModePerm)                                                        // makes the folder if it doesn’t exist
+	modelFile := fmt.Sprintf("%s/dqn-model-%dp-validation-winProb.gob", modelDir, numPlayers) // Model file path
 	fmt.Printf("Using model file: %s\n", modelFile)
 
 	dqnAgent = bot.NewDQNAgent(
@@ -54,7 +54,7 @@ func main() {
 		}
 	} else {
 		fmt.Println("🆕 No saved model found. Training from scratch...")
-		dqnAgent = bot.TrainPokerBot(500000, numPlayers) // Train for 500,000 hands
+		dqnAgent = bot.TrainPokerBot(50000, numPlayers) // Train for 500,000 hands
 		fmt.Println("Training complete!")
 
 		fmt.Println("💾 Saving trained model...")
